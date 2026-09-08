@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SignSpeak — Camera-based gesture translation</title>
+<meta name="description" content="A prototype that turns hand gestures into words using on-device hand tracking.">
+<meta name="theme-color" content="#111111">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<!-- ===================== HEADER ===================== -->
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="logo-mark" aria-hidden="true">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+        <rect x="9" y="2" width="3.4" height="11" rx="1.7" fill="currentColor"/>
+        <rect x="13" y="3" width="3.4" height="10" rx="1.7" fill="currentColor"/>
+        <rect x="17" y="5" width="3.4" height="8" rx="1.7" fill="currentColor"/>
+        <path d="M5 13c0-1 .8-1.8 1.8-1.8s1.8.8 1.8 1.8v.5c1.7-1 3.6-.3 4 1.5.3 1.5 0 3.6-1.2 5.4-1.1 1.7-3 2.6-5.1 2.6-3 0-5.5-2.2-5.9-5.1L0 13.9C-.1 12.6.8 11.6 2 11.5c1-.1 1.9.5 2.2 1.4L5 13z" fill="currentColor"/>
+      </svg>
+    </span>
+    <span class="logo-text">SignSpeak</span>
+    <span class="logo-tag">prototype</span>
+  </div>
+
+  <div class="topbar-center">
+    <p class="topbar-hint">Gesture → word, translated live in your browser</p>
+  </div>
+
+  <div class="topbar-right">
+    <span class="cam-pill" id="topbarCamPill" aria-live="polite">
+      <span class="dot dot-off" id="topbarCamDot" aria-hidden="true"></span>
+      <span id="topbarCamLabel">Camera off</span>
+    </span>
+    <button class="icon-btn" id="settingsBtn" aria-expanded="false" aria-controls="statusPanel" aria-label="Open system status and settings">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M19.4 13.6a7.7 7.7 0 000-3.2l1.9-1.5-1.9-3.3-2.3.7a7.6 7.6 0 00-2.8-1.6L14 2h-4l-.3 2.7a7.6 7.6 0 00-2.8 1.6l-2.3-.7-1.9 3.3 1.9 1.5a7.7 7.7 0 000 3.2l-1.9 1.5 1.9 3.3 2.3-.7c.8.7 1.8 1.3 2.8 1.6L10 22h4l.3-2.7c1-.3 2-.9 2.8-1.6l2.3.7 1.9-3.3-1.9-1.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<!-- ===================== MAIN ===================== -->
+<main id="main">
+
+  <section class="app-grid">
+
+    <!-- LEFT: CAMERA -->
+    <section class="camera-panel" aria-labelledby="cameraHeading">
+      <div class="panel-head">
+        <h2 id="cameraHeading">Camera</h2>
+        <button id="cameraToggle" class="btn btn-primary" type="button" aria-pressed="false">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 7.5A1.5 1.5 0 015.5 6h9A1.5 1.5 0 0116 7.5v9a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 014 16.5v-9z" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M16 10.5l4.2-2.4a.6.6 0 01.9.5v6.8a.6.6 0 01-.9.5L16 13.5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+          </svg>
+          <span id="cameraToggleLabel">Enable camera</span>
+        </button>
+      </div>
+
+      <div class="video-stage" id="videoStage">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+
+        <div class="stage-badge stage-badge-top" id="stageStatusBadge" aria-hidden="true">
+          <span class="dot dot-off" id="stageStatusDot"></span>
+          <span id="stageStatusText">Camera off</span>
+        </div>
+
+        <div class="stage-badge stage-badge-bottom" id="stageHandBadge" role="status" aria-live="polite">
+          Turn on the camera to begin
+        </div>
+
+        <div class="stage-empty" id="stageEmpty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 7.5A1.5 1.5 0 015.5 6h9A1.5 1.5 0 0116 7.5v9a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 014 16.5v-9z" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M16 10.5l4.2-2.4a.6.6 0 01.9.5v6.8a.6.6 0 01-.9.5L16 13.5" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+          <p id="stageEmptyText">Camera is off. Turn it on to start recognizing gestures.</p>
+        </div>
+
+        <div class="stage-error" id="stageError" hidden>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M12 8v5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="12" cy="15.6" r="1" fill="currentColor"/>
+          </svg>
+          <p id="stageErrorText"></p>
+        </div>
+      </div>
+
+      <p class="stage-footnote" id="fpsLine">FPS: —</p>
+    </section>
+
+    <!-- RIGHT: TRANSLATION -->
+    <section class="translate-panel" aria-labelledby="translateHeading">
+      <h2 id="translateHeading">Your message</h2>
+
+      <div class="word-card">
+        <p class="word-state" id="wordState">Waiting for camera</p>
+        <p class="word-display" id="wordDisplay" aria-live="polite">
+          <span class="quote">&laquo;</span><span id="wordText">—</span><span class="quote">&raquo;</span>
+        </p>
+        <div class="confidence-row">
+          <span>Confidence</span>
+          <div class="confidence-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="confidenceBar">
+            <div class="confidence-fill" id="confidenceFill"></div>
+          </div>
+          <span id="confidenceValue">0%</span>
+        </div>
+        <p class="gesture-caption" id="gestureCaption">Gesture detected: <strong id="gestureCaptionValue">none</strong></p>
+      </div>
+
+      <div class="action-row">
+        <button class="btn btn-ghost" id="clearBtn" type="button">Clear</button>
+        <button class="btn btn-primary btn-speak" id="speakBtn" type="button" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>
+            <path d="M16.5 8.5a5 5 0 010 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M18.7 6.3a8.5 8.5 0 010 11.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+          </svg>
+          Speak
+        </button>
+      </div>
+
+      <div class="history-block">
+        <h3>Recent gestures</h3>
+        <ol class="history-list" id="historyList">
+          <li class="history-empty" id="historyEmpty">Recognized words will appear here.</li>
+        </ol>
+      </div>
+    </section>
+
+  </section>
+
+  <!-- ===================== STATUS / DEBUG ===================== -->
+  <section class="status-panel" id="statusPanel">
+    <button class="status-toggle" id="statusToggle" aria-expanded="false" aria-controls="statusBody">
+      <span>System status</span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="chev" aria-hidden="true">
+        <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <div class="status-body" id="statusBody" hidden>
+      <dl class="status-grid">
+        <div><dt>Camera</dt><dd id="statCamera">DISCONNECTED</dd></div>
+        <div><dt>Hand tracking</dt><dd id="statTracking">INACTIVE</dd></div>
+        <div><dt>Hands detected</dt><dd id="statHands">0</dd></div>
+        <div><dt>Recognition</dt><dd id="statRecognition">INACTIVE</dd></div>
+        <div><dt>FPS</dt><dd id="statFps">0</dd></div>
+        <div><dt>Current gesture</dt><dd id="statGesture">—</dd></div>
+        <div><dt>Confidence</dt><dd id="statConfidence">0%</dd></div>
+        <div><dt>Handedness</dt><dd id="statHandedness">—</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ===================== GESTURE GUIDE ===================== -->
+  <section class="guide-section" aria-labelledby="guideHeading">
+    <h2 id="guideHeading">Prototype gesture vocabulary</h2>
+    <p class="guide-note">These gestures are demonstration gestures for the prototype and are not intended to represent a complete sign language.</p>
+
+    <ul class="guide-grid">
+      <li class="guide-card"><span class="guide-emoji" aria-hidden="true">✋</span><span class="guide-word">HELLO</span><span class="guide-desc">Open palm, fingers spread</span></li>
+      <li class="guide-card"><span class="guide-emoji" aria-hidden="true">✊</span><span class="guide-word">HELP</span><span class="guide-desc">Closed fist</span></li>
+      <li class="guide-card"><span class="guide-emoji" aria-hidden="true">☝️</span><span class="guide-word">YES</span><span class="guide-desc">Index finger raised</span></li>
+      <li class="guide-card"><span class="guide-emoji" aria-hidden="true">✌️</span><span class="guide-word">TWO</span><span class="guide-desc">Index and middle raised</span></li>
+      <li class="guide-card"><span class="guide-emoji" aria-hidden="true">👍</span><span class="guide-word">YES</span><span class="guide-desc">Thumb up</span></li>
+      <li class="guide-card"><span class="guide-emoji" aria-hidden="true">👎</span><span class="guide-word">NO</span><span class="guide-desc">Thumb down</span></li>
+      <li class="guide-card"><span class="guide-emoji" aria-hidden="true">🤏</span><span class="guide-word">QUESTION</span><span class="guide-desc">Thumb and index extended, pointing</span></li>
+    </ul>
+  </section>
+
+  <!-- ===================== COMING NEXT ===================== -->
+  <section class="next-section" aria-labelledby="nextHeading">
+    <h2 id="nextHeading">Coming next</h2>
+    <p class="next-intro">This prototype only covers camera → landmarks → gesture → word. These are not built yet:</p>
+    <ul class="next-list">
+      <li><strong>Sentence generation.</strong> Turning a sequence of gestures into a natural sentence, not just single words.</li>
+      <li><strong>Two-way communication.</strong> Speech-to-text so a hearing person can reply in text.</li>
+      <li><strong>Custom gestures.</strong> Letting a person record and label their own signs.</li>
+      <li><strong>On-device privacy mode.</strong> Confirmation that no frames ever leave the browser.</li>
+    </ul>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <p>SignSpeak is a functional prototype. Hand tracking runs locally in your browser — no video is uploaded anywhere.</p>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="script.js"></script>
+</body>
+</html>
