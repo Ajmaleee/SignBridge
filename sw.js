@@ -2,10 +2,16 @@
    Caches the local app shell so the interface loads offline.
    Hand-tracking model files and library code are fetched from
    a CDN at runtime and cached opportunistically (stale-while-
-   revalidate) — they require network on first use. */
+   revalidate) — they require network on first use.
 
-const SHELL_CACHE = "signspeak-shell-v1";
-const RUNTIME_CACHE = "signspeak-runtime-v1";
+   Cache version bumped to v2: the app shell now uses a
+   network-first strategy (falling back to cache only when
+   offline), so future edits to index.html/style.css/script.js
+   show up on next reload instead of being stuck behind an old
+   cached copy. */
+
+const SHELL_CACHE = "signspeak-shell-v2";
+const RUNTIME_CACHE = "signspeak-runtime-v2";
 
 const SHELL_FILES = [
   "./",
@@ -46,18 +52,17 @@ self.addEventListener("fetch", (event) => {
   const isSameOrigin = url.origin === self.location.origin;
 
   if (isSameOrigin) {
-    // App shell: cache-first
+    // App shell: network-first, falling back to cache when offline.
+    // This means edits to these files are picked up on the very next
+    // reload while online, instead of being stuck behind a stale cache.
     event.respondWith(
-      caches.match(request).then((cached) => {
-        if (cached) return cached;
-        return fetch(request)
-          .then((response) => {
-            const clone = response.clone();
-            caches.open(SHELL_CACHE).then((cache) => cache.put(request, clone));
-            return response;
-          })
-          .catch(() => cached);
-      })
+      fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(SHELL_CACHE).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
   } else {
     // CDN / model assets: stale-while-revalidate
@@ -78,3 +83,4 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
