@@ -202,34 +202,51 @@ function resizeOverlay() {
    ========================================================= */
 
 async function initHandLandmarker() {
+  setHandBadge("Loading hand-tracking model…", "info");
+
+  let vision;
   try {
-    setHandBadge("Loading hand-tracking model…", "info");
-    const vision = await FilesetResolver.forVisionTasks(
+    vision = await FilesetResolver.forVisionTasks(
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
     );
-
-    state.landmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-        delegate: "GPU",
-      },
-      runningMode: "VIDEO",
-      numHands: 1,
-      minHandDetectionConfidence: 0.6,
-      minHandPresenceConfidence: 0.6,
-      minTrackingConfidence: 0.6,
-    });
-
-    state.landmarkerReady = true;
-    updateStatusPanel({ tracking: "ACTIVE", recognition: "ACTIVE" });
-    setHandBadge("Show your hand inside the camera frame.", "info");
   } catch (err) {
-    console.error("HandLandmarker init failed:", err);
+    console.error("Vision fileset failed to load:", err);
     state.landmarkerReady = false;
-    showError("Hand tracking temporarily unavailable. The tracking model could not be loaded (check your internet connection).");
+    showTrackingWarning("Hand tracking temporarily unavailable. Could not reach the tracking library (check your internet connection).");
     updateStatusPanel({ tracking: "ERROR", recognition: "INACTIVE" });
+    return;
   }
+
+  // Try GPU first, fall back to CPU — some browsers/devices don't expose a
+  // WebGL-capable GPU delegate, which would otherwise leave tracking off.
+  for (const delegate of ["GPU", "CPU"]) {
+    try {
+      state.landmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate,
+        },
+        runningMode: "VIDEO",
+        numHands: 1,
+        minHandDetectionConfidence: 0.6,
+        minHandPresenceConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+      });
+
+      state.landmarkerReady = true;
+      updateStatusPanel({ tracking: "ACTIVE", recognition: "ACTIVE" });
+      setHandBadge("Show your hand inside the camera frame.", "info");
+      return;
+    } catch (err) {
+      console.warn(`HandLandmarker init failed with delegate=${delegate}:`, err);
+    }
+  }
+
+  // Both delegates failed.
+  state.landmarkerReady = false;
+  showTrackingWarning("Hand tracking temporarily unavailable. The tracking model could not be loaded.");
+  updateStatusPanel({ tracking: "ERROR", recognition: "INACTIVE" });
 }
 
 /* =========================================================
@@ -424,6 +441,45 @@ function classifyGesture(landmarks) {
   return { label: "UNRECOGNIZED", word: null };
 }
 
+/* ---------------------------------------------------------
+   Gesture SEQUENCES → short phrases.
+   This is a small, hand-built lookup — not a general sequence
+   model — kept intentionally simple for the prototype. When one
+   stable gesture is followed by another specific stable gesture
+   within a short time window, a phrase is spoken instead of a
+   single word. This is the first, minimal step toward the
+   "gesture sequence" stage of the future architecture.
+   --------------------------------------------------------- */
+
+const SEQUENCE_WINDOW_MS = 3000;
+const GESTURE_SEQUENCES = [
+  // index finger raised ("YES"), then thumb+index ("QUESTION") in a row
+  { pattern: ["INDEX_ONLY", "THUMB_INDEX"], phrase: "I have a question" },
+];
+
+const recentLabelHistory = []; // [{ label, time }]
+
+function checkSequenceMatch(label) {
+  const now = performance.now();
+  recentLabelHistory.push({ label, time: now });
+  while (recentLabelHistory.length > 4) recentLabelHistory.shift();
+  // drop anything outside the time window
+  while (recentLabelHistory.length && now - recentLabelHistory[0].time > SEQUENCE_WINDOW_MS) {
+    recentLabelHistory.shift();
+  }
+
+  for (const seq of GESTURE_SEQUENCES) {
+    const n = seq.pattern.length;
+    if (recentLabelHistory.length < n) continue;
+    const tail = recentLabelHistory.slice(-n).map((e) => e.label);
+    if (tail.every((l, i) => l === seq.pattern[i])) {
+      recentLabelHistory.length = 0; // consume the match so it doesn't refire
+      return seq.phrase;
+    }
+  }
+  return null;
+}
+
 /* =========================================================
    5. TEMPORAL SMOOTHING
    Rolling buffer + majority vote so the output word only
@@ -436,48 +492,52 @@ const STABILITY_RATIO = 0.66;  // fraction of the window that must agree
 const smoothingBuffer = [];
 
 function pushToSmoothingBuffer(classification, detectionScore) {
+  const label = classification && classification.word ? classification.label : null;
   const word = classification && classification.word ? classification.word : null;
-  smoothingBuffer.push({ word, score: detectionScore || 0 });
+  smoothingBuffer.push({ label, word, score: detectionScore || 0 });
   if (smoothingBuffer.length > SMOOTHING_WINDOW) smoothingBuffer.shift();
 
-  // majority vote among non-null entries
+  // majority vote among non-null entries, keyed by label (so gestures that
+  // share the same word, like THUMB_UP and INDEX_ONLY both meaning "YES",
+  // don't get merged together mid-vote)
   const counts = new Map();
-  let scoreSum = new Map();
+  const scoreSum = new Map();
   for (const entry of smoothingBuffer) {
-    if (!entry.word) continue;
-    counts.set(entry.word, (counts.get(entry.word) || 0) + 1);
-    scoreSum.set(entry.word, (scoreSum.get(entry.word) || 0) + entry.score);
+    if (!entry.label) continue;
+    counts.set(entry.label, (counts.get(entry.label) || 0) + 1);
+    scoreSum.set(entry.label, (scoreSum.get(entry.label) || 0) + entry.score);
   }
 
-  let bestWord = null;
+  let bestLabel = null;
   let bestCount = 0;
-  for (const [word, count] of counts) {
+  for (const [label, count] of counts) {
     if (count > bestCount) {
-      bestWord = word;
+      bestLabel = label;
       bestCount = count;
     }
   }
 
-  const ratio = bestWord ? bestCount / smoothingBuffer.length : 0;
-  const stable = bestWord && ratio >= STABILITY_RATIO;
+  const ratio = bestLabel ? bestCount / smoothingBuffer.length : 0;
+  const stable = bestLabel && ratio >= STABILITY_RATIO;
+  const bestWord = bestLabel ? GESTURE_LABELS[bestLabel] || null : null;
 
   if (stable) {
-    const avgScore = scoreSum.get(bestWord) / bestCount;
+    const avgScore = scoreSum.get(bestLabel) / bestCount;
     // blend detection confidence with agreement ratio for a display value
     const confidence = Math.min(0.99, avgScore * 0.65 + ratio * 0.35);
-    return { word: bestWord, confidence, stable: true };
+    return { label: bestLabel, word: bestWord, confidence, stable: true };
   }
 
-  return { word: bestWord, confidence: bestWord ? bestCount / smoothingBuffer.length : 0, stable: false };
+  return { label: bestLabel, word: bestWord, confidence: bestWord ? bestCount / smoothingBuffer.length : 0, stable: false };
 }
 
 /* =========================================================
    6. UI UPDATES
    ========================================================= */
 
-let lastAcceptedWord = null;
+let lastAcceptedLabel = null;
 
-function applyRecognitionResult({ word, confidence, stable }) {
+function applyRecognitionResult({ label, word, confidence, stable }) {
   if (!state.cameraOn) return;
 
   if (!word) {
@@ -497,8 +557,8 @@ function applyRecognitionResult({ word, confidence, stable }) {
   setConfidence(confidence);
   gestureCaptionValue.textContent = word.toLowerCase();
 
-  if (word !== lastAcceptedWord) {
-    lastAcceptedWord = word;
+  if (label !== lastAcceptedLabel) {
+    lastAcceptedLabel = label;
     wordState.textContent = "Recognized";
     wordText.textContent = word;
     speakBtn.disabled = false;
@@ -508,6 +568,18 @@ function applyRecognitionResult({ word, confidence, stable }) {
       wordText.parentElement.classList.add("pulse-once");
     }
     addToHistory(word);
+    speakText(word);
+
+    // Check whether this newly-accepted gesture completes a short sequence
+    // (e.g. index finger raised, then the question gesture) that maps to
+    // a phrase. If so, speak and display the phrase instead.
+    const phrase = checkSequenceMatch(label);
+    if (phrase) {
+      wordText.textContent = phrase;
+      wordState.textContent = "Recognized phrase";
+      addToHistory(phrase);
+      speakText(phrase);
+    }
   } else {
     wordState.textContent = "Recognized";
   }
@@ -540,8 +612,10 @@ function resetRecognitionUI() {
   setConfidence(0);
   gestureCaptionValue.textContent = "none";
   speakBtn.disabled = true;
-  lastAcceptedWord = null;
+  lastAcceptedLabel = null;
   smoothingBuffer.length = 0;
+  recentLabelHistory.length = 0;
+  window.speechSynthesis && window.speechSynthesis.cancel();
 }
 
 clearBtn.addEventListener("click", () => {
@@ -578,6 +652,13 @@ function hideError() {
   stageError.hidden = true;
 }
 
+/* Non-blocking warning: used when the camera itself is fine but hand
+   tracking can't run. Never covers the live video feed. */
+function showTrackingWarning(message) {
+  setHandBadge(message, "warning");
+  setToast(message);
+}
+
 let toastTimer = null;
 function setToast(message) {
   toast.textContent = message;
@@ -590,8 +671,7 @@ function setToast(message) {
    7. TEXT-TO-SPEECH
    ========================================================= */
 
-speakBtn.addEventListener("click", () => {
-  const text = wordText.textContent;
+function speakText(text) {
   if (!text || text === "—") return;
 
   if (!("speechSynthesis" in window)) {
@@ -604,7 +684,9 @@ speakBtn.addEventListener("click", () => {
   utterance.rate = 0.95;
   utterance.pitch = 1;
   window.speechSynthesis.speak(utterance);
-});
+}
+
+speakBtn.addEventListener("click", () => speakText(wordText.textContent));
 
 /* =========================================================
    8. SETTINGS / STATUS PANEL
